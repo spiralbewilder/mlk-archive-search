@@ -516,7 +516,7 @@ HTML_TEMPLATE = '''
         }
 
         function escapeRegex(string) {
-            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return string.replace(/[.*+?^${}()|\\[\]]/g, '\\$&');
         }
 
         function updatePagination(total) {
