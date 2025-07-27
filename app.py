@@ -34,9 +34,8 @@ def extract_context(text, search_terms, max_lines=5):
             result += "..."
         return process_prefix(result)
     
-    # Split text into lines and words for better context
+    # Split text into lines for better context
     lines = text.split('\n')
-    text_lower = text.lower()
     
     contexts = []
     for term in search_terms:
@@ -45,18 +44,41 @@ def extract_context(text, search_terms, max_lines=5):
         # Find the line containing the search term
         for line_idx, line in enumerate(lines):
             if term_lower in line.lower():
-                # Get up to max_lines centered around the match
-                start_line = max(0, line_idx - max_lines // 2)
-                end_line = min(len(lines), start_line + max_lines)
-                
-                context_lines = lines[start_line:end_line]
-                context = '\n'.join(context_lines)
-                
-                # Add ellipsis if we truncated
-                if start_line > 0:
-                    context = "..." + context
-                if end_line < len(lines):
-                    context = context + "..."
+                # If line is very long, focus on the part with the search term
+                if len(line) > 300:  # Long line, extract around the term
+                    term_pos = line.lower().find(term_lower)
+                    start_char = max(0, term_pos - 150)
+                    end_char = min(len(line), term_pos + 150)
+                    
+                    focused_line = line[start_char:end_char]
+                    if start_char > 0:
+                        focused_line = "..." + focused_line
+                    if end_char < len(line):
+                        focused_line = focused_line + "..."
+                    
+                    # Use this focused line plus a few surrounding lines
+                    start_line = max(0, line_idx - 1)
+                    end_line = min(len(lines), line_idx + 3)
+                    
+                    context_lines = lines[start_line:line_idx] + [focused_line] + lines[line_idx+1:end_line]
+                    context = '\n'.join(context_lines)
+                else:
+                    # Normal line length, get surrounding context
+                    start_line = max(0, line_idx - 1)
+                    end_line = min(len(lines), start_line + max_lines)
+                    
+                    # If we have room, expand backwards
+                    if end_line - start_line < max_lines and start_line > 0:
+                        start_line = max(0, end_line - max_lines)
+                    
+                    context_lines = lines[start_line:end_line]
+                    context = '\n'.join(context_lines)
+                    
+                    # Add ellipsis if we truncated
+                    if start_line > 0:
+                        context = "..." + context
+                    if end_line < len(lines):
+                        context = context + "..."
                 
                 contexts.append(context)
                 break  # Only get first occurrence for now
