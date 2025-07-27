@@ -272,6 +272,66 @@ def health():
     """Health check endpoint"""
     return {'status': 'ok', 'database': DATABASE_PATH}
 
+@app.route('/document/<element_id>')
+def view_document(element_id):
+    """View full text content for a specific document element"""
+    conn = get_db_connection()
+    
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT element_id, text, record_id, metadata_filename, metadata_data_source_url
+            FROM documents 
+            WHERE element_id = ?
+        """, (element_id,))
+        
+        document = cursor.fetchone()
+        
+        if not document:
+            return "Document not found", 404
+        
+        # Get query parameter for highlighting
+        query = request.args.get('q', '').strip()
+        
+        # Process the text for display
+        text = process_prefix(document['text'])
+        
+        # If query provided, highlight search terms
+        if query:
+            search_terms = re.findall(r'"[^"]+"|\S+', query)
+            search_terms = [term.strip('"') for term in search_terms if not term.upper() in ['AND', 'OR', 'NOT']]
+            
+            for term in search_terms:
+                if len(term) > 1:
+                    # Simple highlighting
+                    pattern = re.compile(re.escape(term), re.IGNORECASE)
+                    text = pattern.sub(f'<mark>{term}</mark>', text)
+        
+        # Construct PDF URL
+        pdf_url = ""
+        if document['metadata_data_source_url']:
+            s3_url = document['metadata_data_source_url']
+            if s3_url.startswith('s3://example-transformations-mlk-archive/mlk-archive/'):
+                filename = s3_url.replace('s3://example-transformations-mlk-archive/mlk-archive/', '')
+                pdf_url = S3_BASE_URL + quote(filename)
+            else:
+                pdf_url = s3_url
+        elif document['metadata_filename']:
+            pdf_url = S3_BASE_URL + quote(document['metadata_filename'])
+        
+        return render_template_string(DOCUMENT_TEMPLATE, 
+                                    element_id=document['element_id'],
+                                    text=text,
+                                    filename=document['metadata_filename'] or 'Unknown',
+                                    pdf_url=pdf_url,
+                                    record_id=document['record_id'],
+                                    query=query)
+        
+    except Exception as e:
+        return f"Error loading document: {str(e)}", 500
+    finally:
+        conn.close()
+
 # HTML Template (embedded for simplicity)
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -358,6 +418,14 @@ HTML_TEMPLATE = '''
             font-weight: bold;
         }
         .pdf-link:hover {
+            text-decoration: underline;
+        }
+        .text-link {
+            color: #007cba;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .text-link:hover {
             text-decoration: underline;
         }
         .loading {
@@ -490,6 +558,7 @@ HTML_TEMPLATE = '''
                         <div class="result-context">${highlightSearchTerms(result.context, currentQuery)}</div>
                         <div class="result-meta">
                             ${result.pdf_url ? `<a href="${result.pdf_url}" target="_blank" class="pdf-link">📄 View PDF: ${result.filename}</a>` : `File: ${result.filename}`}
+                            | <a href="/document/${result.element_id}?q=${encodeURIComponent(currentQuery)}" target="_blank" class="text-link">📄 View Full Text</a>
                             <br>Document ID: ${result.element_id}
                         </div>
                     </div>
@@ -571,6 +640,107 @@ HTML_TEMPLATE = '''
             pagination.innerHTML = paginationHtml;
         }
     </script>
+</body>
+</html>
+'''
+
+# Document view template
+DOCUMENT_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLK Archive - Document Text</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .document-content {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .document-text {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 16px;
+            line-height: 1.7;
+        }
+        .metadata {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            font-size: 14px;
+            color: #666;
+        }
+        .back-link {
+            color: #007cba;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .pdf-link {
+            color: #007cba;
+            text-decoration: none;
+            font-weight: bold;
+            margin-left: 15px;
+        }
+        .pdf-link:hover {
+            text-decoration: underline;
+        }
+        mark {
+            background-color: #ffeb3b;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .document-meta-item {
+            margin: 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MLK Archive - Document Text</h1>
+        <a href="javascript:history.back()" class="back-link">← Back to Search Results</a>
+        {% if pdf_url %}
+        <a href="{{ pdf_url }}" target="_blank" class="pdf-link">📄 View Original PDF</a>
+        {% endif %}
+    </div>
+
+    <div class="document-content">
+        <div class="document-text">{{ text|safe }}</div>
+    </div>
+
+    <div class="metadata">
+        <div class="document-meta-item"><strong>Filename:</strong> {{ filename }}</div>
+        <div class="document-meta-item"><strong>Document ID:</strong> {{ element_id }}</div>
+        <div class="document-meta-item"><strong>Record ID:</strong> {{ record_id }}</div>
+        {% if query %}
+        <div class="document-meta-item"><strong>Search Query:</strong> {{ query }}</div>
+        {% endif %}
+    </div>
 </body>
 </html>
 '''
