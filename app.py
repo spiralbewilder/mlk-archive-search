@@ -115,16 +115,14 @@ def search_documents(query, limit=50, offset=0):
         has_fts = cursor.fetchone() is not None
         
         if has_fts:
-            # Use FTS search with deduplication by element_id
+            # Use FTS search - simplified for performance
             fts_query = parse_boolean_query(query)
             sql = """
-                SELECT d.rowid, d.element_id, d.text, d.record_id, 
-                       d.metadata_filename, d.metadata_data_source_url,
-                       MIN(rank) as rank
-                FROM documents_fts fts
-                JOIN documents d ON d.rowid = fts.rowid
+                SELECT rowid, element_id, text, record_id, 
+                       metadata_filename, metadata_data_source_url,
+                       rank
+                FROM documents_fts
                 WHERE documents_fts MATCH ?
-                GROUP BY d.element_id
                 ORDER BY rank
                 LIMIT ? OFFSET ?
             """
@@ -148,8 +146,14 @@ def search_documents(query, limit=50, offset=0):
         search_terms = re.findall(r'"[^"]+"|\S+', query)
         search_terms = [term.strip('"') for term in search_terms if not term.upper() in ['AND', 'OR', 'NOT']]
         
+        # Deduplicate by element_id while preserving order
+        seen_elements = set()
         formatted_results = []
         for row in results:
+            if row['element_id'] in seen_elements:
+                continue
+            seen_elements.add(row['element_id'])
+            
             context = extract_context(row['text'], search_terms)
             
             # Construct PDF URL
@@ -173,14 +177,9 @@ def search_documents(query, limit=50, offset=0):
                 'record_id': row['record_id']
             })
         
-        # Get total count for pagination (with deduplication)
+        # Get total count for pagination - simplified for performance
         if has_fts:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT d.element_id) 
-                FROM documents_fts fts
-                JOIN documents d ON d.rowid = fts.rowid
-                WHERE documents_fts MATCH ?
-            """, (fts_query,))
+            cursor.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH ?", (fts_query,))
         else:
             cursor.execute("SELECT COUNT(*) FROM documents WHERE text LIKE ?", (like_query,))
         
