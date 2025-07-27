@@ -146,13 +146,14 @@ def search_documents(query, limit=50, offset=0):
         search_terms = re.findall(r'"[^"]+"|\S+', query)
         search_terms = [term.strip('"') for term in search_terms if not term.upper() in ['AND', 'OR', 'NOT']]
         
-        # Deduplicate by element_id while preserving order
-        seen_elements = set()
+        # Deduplicate by filename to avoid multiple results from same PDF
+        seen_files = set()
         formatted_results = []
         for row in results:
-            if row['element_id'] in seen_elements:
+            filename = row['metadata_filename'] or 'Unknown'
+            if filename in seen_files:
                 continue
-            seen_elements.add(row['element_id'])
+            seen_files.add(filename)
             
             context = extract_context(row['text'], search_terms)
             
