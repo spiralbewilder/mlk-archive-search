@@ -180,13 +180,21 @@ def search_documents(query, limit=50, offset=0):
         search_terms = re.findall(r'"[^"]+"|\S+', query)
         search_terms = [term.strip('"') for term in search_terms if not term.upper() in ['AND', 'OR', 'NOT']]
         
-        # Deduplicate by filename to avoid multiple results from same PDF
+        # Deduplicate by filename and filter for results that actually contain search terms
         seen_files = set()
         formatted_results = []
         for row in results:
             filename = row['metadata_filename'] or 'Unknown'
             if filename in seen_files:
                 continue
+            
+            # Check if any search term actually appears in the text (case-insensitive)
+            text_lower = row['text'].lower()
+            has_search_term = any(term.lower().strip('"') in text_lower for term in search_terms)
+            
+            if not has_search_term:
+                continue  # Skip results that don't actually contain the search terms
+                
             seen_files.add(filename)
             
             context = extract_context(row['text'], search_terms)
