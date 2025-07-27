@@ -500,7 +500,12 @@ HTML_TEMPLATE = '''
             let highlightedText = text;
             
             terms.forEach(term => {
-                const cleanTerm = term.replace(/"/g, '').replace(/\\b(AND|OR|NOT)\\b/gi, '');
+                // Remove quotes and skip boolean operators
+                let cleanTerm = term.replace(/"/g, '');
+                if (/^(AND|OR|NOT)$/i.test(cleanTerm)) {
+                    return; // Skip boolean operators
+                }
+                
                 if (cleanTerm.length > 1) {
                     const regex = new RegExp(`(${escapeRegex(cleanTerm)})`, 'gi');
                     highlightedText = highlightedText.replace(regex, '<strong style="background-color: yellow;">$1</strong>');
@@ -511,7 +516,7 @@ HTML_TEMPLATE = '''
         }
 
         function escapeRegex(string) {
-            return string.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
 
         function updatePagination(total) {
