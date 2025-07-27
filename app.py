@@ -24,35 +24,47 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def extract_context(text, search_terms, context_words=CONTEXT_WORDS):
-    """Extract context around search terms with condensed prefix"""
+def extract_context(text, search_terms, max_lines=5):
+    """Extract context around search terms showing up to max_lines of text"""
     if not text or not search_terms:
-        return process_prefix(text[:200] + "..." if len(text) > 200 else text)
+        # Show up to max_lines when no search terms
+        lines = text.split('\n')[:max_lines]
+        result = '\n'.join(lines)
+        if len(text.split('\n')) > max_lines:
+            result += "..."
+        return process_prefix(result)
     
-    # Convert search terms to lowercase for case-insensitive matching
-    words = text.split()
-    lower_words = [w.lower() for w in words]
+    # Split text into lines and words for better context
+    lines = text.split('\n')
+    text_lower = text.lower()
     
     contexts = []
     for term in search_terms:
         term_lower = term.lower().strip('"')
         
-        # Find all occurrences of the term
-        for i, word in enumerate(lower_words):
-            if term_lower in word:
-                start = max(0, i - context_words)
-                end = min(len(words), i + context_words + 1)
+        # Find the line containing the search term
+        for line_idx, line in enumerate(lines):
+            if term_lower in line.lower():
+                # Get up to max_lines centered around the match
+                start_line = max(0, line_idx - max_lines // 2)
+                end_line = min(len(lines), start_line + max_lines)
                 
-                context = ' '.join(words[start:end])
-                if start > 0:
+                context_lines = lines[start_line:end_line]
+                context = '\n'.join(context_lines)
+                
+                # Add ellipsis if we truncated
+                if start_line > 0:
                     context = "..." + context
-                if end < len(words):
+                if end_line < len(lines):
                     context = context + "..."
                 
                 contexts.append(context)
                 break  # Only get first occurrence for now
     
-    result = contexts[0] if contexts else text[:200] + "..." if len(text) > 200 else text
+    result = contexts[0] if contexts else '\n'.join(lines[:max_lines])
+    if not contexts and len(lines) > max_lines:
+        result += "..."
+    
     return process_prefix(result)
 
 def process_prefix(text):
@@ -303,6 +315,8 @@ HTML_TEMPLATE = '''
         .result-context {
             margin-bottom: 10px;
             line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         .result-meta {
             font-size: 14px;
