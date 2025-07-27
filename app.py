@@ -6,15 +6,17 @@ A simple Flask web app for searching through MLK declassified documents
 import sqlite3
 import json
 import re
+import os
 from flask import Flask, request, jsonify, render_template_string
 from urllib.parse import quote
 
 app = Flask(__name__)
 
-# Configuration
-DATABASE_PATH = 'mlk.db'
-S3_BASE_URL = 'https://example-transformations-mlk-archive.s3.amazonaws.com/mlk-archive/'
-CONTEXT_WORDS = 10  # Number of words before/after search term
+# Configuration from environment variables
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-key-change-in-production')
+DATABASE_PATH = os.environ.get('DATABASE_PATH', 'mlk.db')
+S3_BASE_URL = os.environ.get('S3_BASE_URL', 'https://example-transformations-mlk-archive.s3.amazonaws.com/mlk-archive/')
+CONTEXT_WORDS = int(os.environ.get('CONTEXT_WORDS', '10'))  # Number of words before/after search term
 
 def get_db_connection():
     """Get database connection"""
@@ -64,9 +66,7 @@ def process_prefix(text):
     return cleaned_text
 
 def parse_boolean_query(query):
-    """Parse boolean search query"""
-    # Simple boolean parser - splits on AND, OR, NOT
-    # For now, we'll use SQLite FTS syntax
+    """Parse boolean search query with proper FTS5 escaping"""
     query = query.strip()
     
     # Convert common boolean operators to FTS syntax
@@ -74,7 +74,35 @@ def parse_boolean_query(query):
     query = re.sub(r'\bOR\b', ' OR ', query, flags=re.IGNORECASE)
     query = re.sub(r'\bNOT\b', ' NOT ', query, flags=re.IGNORECASE)
     
-    return query
+    # Split query into tokens, preserving quoted phrases
+    tokens = re.findall(r'"[^"]*"|\S+', query)
+    
+    processed_tokens = []
+    for token in tokens:
+        # Skip boolean operators
+        if token.upper() in ['AND', 'OR', 'NOT']:
+            processed_tokens.append(token)
+        elif token.startswith('"') and token.endswith('"'):
+            # Quoted phrase - escape special FTS characters inside
+            inner = token[1:-1]
+            escaped = escape_fts_special_chars(inner)
+            processed_tokens.append(f'"{escaped}"')
+        else:
+            # Regular term - escape special FTS characters
+            escaped = escape_fts_special_chars(token)
+            processed_tokens.append(escaped)
+    
+    return ' '.join(processed_tokens)
+
+def escape_fts_special_chars(text):
+    """Escape special characters for FTS5 queries"""
+    # FTS5 special characters that need escaping: " * : < > [ ] { } ( ) - + ^ ~
+    # We'll quote terms that contain problematic characters
+    if re.search(r'[.*:><\[\]{}()\-+^~]', text):
+        # Remove existing quotes and escape internal quotes
+        escaped = text.replace('"', '""')
+        return f'"{escaped}"'
+    return text
 
 def search_documents(query, limit=50, offset=0):
     """Search documents using FTS"""
@@ -87,15 +115,16 @@ def search_documents(query, limit=50, offset=0):
         has_fts = cursor.fetchone() is not None
         
         if has_fts:
-            # Use FTS search
+            # Use FTS search with deduplication by element_id
             fts_query = parse_boolean_query(query)
             sql = """
                 SELECT d.rowid, d.element_id, d.text, d.record_id, 
                        d.metadata_filename, d.metadata_data_source_url,
-                       rank
+                       MIN(rank) as rank
                 FROM documents_fts fts
                 JOIN documents d ON d.rowid = fts.rowid
                 WHERE documents_fts MATCH ?
+                GROUP BY d.element_id
                 ORDER BY rank
                 LIMIT ? OFFSET ?
             """
@@ -144,9 +173,14 @@ def search_documents(query, limit=50, offset=0):
                 'record_id': row['record_id']
             })
         
-        # Get total count for pagination
+        # Get total count for pagination (with deduplication)
         if has_fts:
-            cursor.execute("SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH ?", (fts_query,))
+            cursor.execute("""
+                SELECT COUNT(DISTINCT d.element_id) 
+                FROM documents_fts fts
+                JOIN documents d ON d.rowid = fts.rowid
+                WHERE documents_fts MATCH ?
+            """, (fts_query,))
         else:
             cursor.execute("SELECT COUNT(*) FROM documents WHERE text LIKE ?", (like_query,))
         
@@ -493,4 +527,6 @@ HTML_TEMPLATE = '''
 '''
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 8080))
+    debug = os.environ.get('DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug)
